@@ -1,4 +1,4 @@
-module github.com/ffuf/ffuf/v2
+module github.com/hussein98d/ffuf00/v2
 
 go 1.17
 
