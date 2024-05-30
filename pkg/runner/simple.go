@@ -69,7 +69,7 @@ func NewSimpleRunner(conf *ffuf.Config, replay bool) ffuf.RunnerProvider {
 			TLSHandshakeTimeout: time.Duration(time.Duration(conf.Timeout) * time.Second),
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
-				MinVersion:         tls.VersionTLS10,
+				MinVersion:         tls.VersionTLS13,
 				Renegotiation:      tls.RenegotiateOnceAsClient,
 				ServerName:         conf.SNI,
 				Certificates:       cert,
