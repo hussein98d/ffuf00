@@ -61,8 +61,8 @@ func NewSimpleRunner(conf *ffuf.Config, replay bool) ffuf.RunnerProvider {
 			DisableKeepAlives:   true,
 			ForceAttemptHTTP2:   conf.Http2,
 			Proxy:               proxyURL,
-			MaxIdleConns:        1000,
-			MaxIdleConnsPerHost: 500,
+			MaxIdleConns:        0,
+			MaxIdleConnsPerHost: 0,
 			MaxConnsPerHost:     500,
 			DialContext: (&net.Dialer{
 				Timeout: time.Duration(time.Duration(conf.Timeout) * time.Second),
