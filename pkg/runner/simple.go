@@ -103,135 +103,141 @@ func (r *SimpleRunner) Prepare(input map[string][]byte, basereq *ffuf.Request) (
 }
 
 func (r *SimpleRunner) Execute(req *ffuf.Request) (ffuf.Response, error) {
-	var httpreq *http.Request
-	var err error
-	var rawreq []byte
-	data := bytes.NewReader(req.Data)
+    var httpreq *http.Request
+    var err error
+    var rawreq []byte
+    data := bytes.NewReader(req.Data)
 
-	var start time.Time
-	var firstByteTime time.Duration
+    var start time.Time
+    var firstByteTime time.Duration
 
-	trace := &httptrace.ClientTrace{
-		WroteRequest: func(wri httptrace.WroteRequestInfo) {
-			start = time.Now() // begin the timer after the request is fully written
-		},
-		GotFirstResponseByte: func() {
-			firstByteTime = time.Since(start) // record when the first byte of the response was received
-		},
-	}
+    trace := &httptrace.ClientTrace{
+        WroteRequest: func(wri httptrace.WroteRequestInfo) {
+            start = time.Now() // begin the timer after the request is fully written
+        },
+        GotFirstResponseByte: func() {
+            firstByteTime = time.Since(start) // record when the first byte of the response was received
+        },
+    }
 
-	httpreq, err = http.NewRequestWithContext(r.config.Context, req.Method, req.Url, data)
+    httpreq, err = http.NewRequestWithContext(r.config.Context, req.Method, req.Url, data)
 
-	if err != nil {
-		return ffuf.Response{}, err
-	}
+    if err != nil {
+        return ffuf.Response{}, err
+    }
 
-	// set default User-Agent header if not present
-	if _, ok := req.Headers["User-Agent"]; !ok {
-		req.Headers["User-Agent"] = fmt.Sprintf("%s v%s", "Fuzz Faster U Fool", ffuf.Version())
-	}
+    // set default User-Agent header if not present
+    if _, ok := req.Headers["User-Agent"]; !ok {
+        req.Headers["User-Agent"] = fmt.Sprintf("%s v%s", "Fuzz Faster U Fool", ffuf.Version())
+    }
 
-	// Handle Go http.Request special cases
-	if _, ok := req.Headers["Host"]; ok {
-		httpreq.Host = req.Headers["Host"]
-	}
+    // Set the Connection: close header
+    req.Headers["Connection"] = "close"
 
-	req.Host = httpreq.Host
-	httpreq = httpreq.WithContext(httptrace.WithClientTrace(r.config.Context, trace))
+    // Handle Go http.Request special cases
+    if _, ok := req.Headers["Host"]; ok {
+        httpreq.Host = req.Headers["Host"]
+    }
 
-	if r.config.Raw {
-		httpreq.URL.Opaque = req.Url
-	}
+    req.Host = httpreq.Host
+    httpreq = httpreq.WithContext(httptrace.WithClientTrace(r.config.Context, trace))
 
-	for k, v := range req.Headers {
-		httpreq.Header.Set(k, v)
-	}
+    if r.config.Raw {
+        httpreq.URL.Opaque = req.Url
+    }
 
-	if len(r.config.OutputDirectory) > 0 {
-		rawreq, _ = httputil.DumpRequestOut(httpreq, true)
-	}
+    for k, v := range req.Headers {
+        httpreq.Header.Set(k, v)
+    }
 
-	httpresp, err := r.client.Do(httpreq)
-	if err != nil {
-		return ffuf.Response{}, err
-	}
+    if len(r.config.OutputDirectory) > 0 {
+        rawreq, _ = httputil.DumpRequestOut(httpreq, true)
+    }
 
-	resp := ffuf.NewResponse(httpresp, req)
-	defer httpresp.Body.Close()
+    httpresp, err := r.client.Do(httpreq)
+    if err != nil {
+        return ffuf.Response{}, err
+    }
 
-	// Check if we should download the resource or not
-	size, err := strconv.Atoi(httpresp.Header.Get("Content-Length"))
-	if err == nil {
-		resp.ContentLength = int64(size)
-		if (r.config.IgnoreBody) || (size > MAX_DOWNLOAD_SIZE) {
-			resp.Cancelled = true
-			return resp, nil
-		}
-	}
+    resp := ffuf.NewResponse(httpresp, req)
+    defer httpresp.Body.Close()
 
-	if len(r.config.OutputDirectory) > 0 {
-		rawresp, _ := httputil.DumpResponse(httpresp, true)
-		resp.Request.Raw = string(rawreq)
-		resp.Raw = string(rawresp)
-	}
-	var bodyReader io.ReadCloser
-	if httpresp.Header.Get("Content-Encoding") == "gzip" {
-		bodyReader, err = gzip.NewReader(httpresp.Body)
-		if err != nil {
-			// fallback to raw data
-			bodyReader = httpresp.Body
-		}
-	} else if httpresp.Header.Get("Content-Encoding") == "br" {
-		bodyReader = io.NopCloser(brotli.NewReader(httpresp.Body))
-		if err != nil {
-			// fallback to raw data
-			bodyReader = httpresp.Body
-		}
-	} else if httpresp.Header.Get("Content-Encoding") == "deflate" {
-		bodyReader = flate.NewReader(httpresp.Body)
-		if err != nil {
-			// fallback to raw data
-			bodyReader = httpresp.Body
-		}
-	} else {
-		bodyReader = httpresp.Body
-	}
+    // Check if we should download the resource or not
+    size, err := strconv.Atoi(httpresp.Header.Get("Content-Length"))
+    if err == nil {
+        resp.ContentLength = int64(size)
+        if (r.config.IgnoreBody) || (size > MAX_DOWNLOAD_SIZE) {
+            resp.Cancelled = true
+            return resp, nil
+        }
+    }
 
-	if respbody, err := io.ReadAll(bodyReader); err == nil {
-		resp.ContentLength = int64(len(string(respbody)))
-		resp.Data = respbody
-	}
+    if len(r.config.OutputDirectory) > 0 {
+        rawresp, _ := httputil.DumpResponse(httpresp, true)
+        resp.Request.Raw = string(rawreq)
+        resp.Raw = string(rawresp)
+    }
+    var bodyReader io.ReadCloser
+    if httpresp.Header.Get("Content-Encoding") == "gzip" {
+        bodyReader, err = gzip.NewReader(httpresp.Body)
+        if err != nil {
+            // fallback to raw data
+            bodyReader = httpresp.Body
+        }
+    } else if httpresp.Header.Get("Content-Encoding") == "br" {
+        bodyReader = io.NopCloser(brotli.NewReader(httpresp.Body))
+        if err != nil {
+            // fallback to raw data
+            bodyReader = httpresp.Body
+        }
+    } else if httpresp.Header.Get("Content-Encoding") == "deflate" {
+        bodyReader = flate.NewReader(httpresp.Body)
+        if err != nil {
+            // fallback to raw data
+            bodyReader = httpresp.Body
+        }
+    } else {
+        bodyReader = httpresp.Body
+    }
 
-	wordsSize := len(strings.Split(string(resp.Data), " "))
-	linesSize := len(strings.Split(string(resp.Data), "\n"))
-	resp.ContentWords = int64(wordsSize)
-	resp.ContentLines = int64(linesSize)
-	resp.Time = firstByteTime
-	return resp, nil
+    if respbody, err := io.ReadAll(bodyReader); err == nil {
+        resp.ContentLength = int64(len(string(respbody)))
+        resp.Data = respbody
+    }
+
+    wordsSize := len(strings.Split(string(resp.Data), " "))
+    linesSize := len(strings.Split(string(resp.Data), "\n"))
+    resp.ContentWords = int64(wordsSize)
+    resp.ContentLines = int64(linesSize)
+    resp.Time = firstByteTime
+    return resp, nil
 }
 
 func (r *SimpleRunner) Dump(req *ffuf.Request) ([]byte, error) {
-	var httpreq *http.Request
-	var err error
-	data := bytes.NewReader(req.Data)
-	httpreq, err = http.NewRequestWithContext(r.config.Context, req.Method, req.Url, data)
-	if err != nil {
-		return []byte{}, err
-	}
+    var httpreq *http.Request
+    var err error
+    data := bytes.NewReader(req.Data)
+    httpreq, err = http.NewRequestWithContext(r.config.Context, req.Method, req.Url, data)
+    if err != nil {
+        return []byte{}, err
+    }
 
-	// set default User-Agent header if not present
-	if _, ok := req.Headers["User-Agent"]; !ok {
-		req.Headers["User-Agent"] = fmt.Sprintf("%s v%s", "Fuzz Faster U Fool", ffuf.Version())
-	}
+    // set default User-Agent header if not present
+    if _, ok := req.Headers["User-Agent"]; !ok {
+        req.Headers["User-Agent"] = fmt.Sprintf("%s v%s", "Fuzz Faster U Fool", ffuf.Version())
+    }
 
-	// Handle Go http.Request special cases
-	if _, ok := req.Headers["Host"]; ok {
-		httpreq.Host = req.Headers["Host"]
-	}
+    // Set the Connection: close header
+    req.Headers["Connection"] = "close"
 
-	req.Host = httpreq.Host
-	for k, v := range req.Headers {
-		httpreq.Header.Set(k, v)
-	}
-	return httputil.DumpRequestOut(httpreq, true)
+    // Handle Go http.Request special cases
+    if _, ok := req.Headers["Host"]; ok {
+        httpreq.Host = req.Headers["Host"]
+    }
+
+    req.Host = httpreq.Host
+    for k, v := range req.Headers {
+        httpreq.Header.Set(k, v)
+    }
+    return httputil.DumpRequestOut(httpreq, true)
 }
