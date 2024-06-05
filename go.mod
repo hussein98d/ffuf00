@@ -1,4 +1,4 @@
-module github.com/hussein98d/ffuf000000000/v2
+module github.com/hussein98d/ffuf0000000000/v2
 
 go 1.17
 
