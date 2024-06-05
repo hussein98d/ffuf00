@@ -132,7 +132,7 @@ func (r *SimpleRunner) Execute(req *ffuf.Request) (ffuf.Response, error) {
     }
 
     // Set the Connection: close header
-    req.Headers["Connection"] = "close"
+    req.Close = true
 
     // Handle Go http.Request special cases
     if _, ok := req.Headers["Host"]; ok {
