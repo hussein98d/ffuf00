@@ -2,12 +2,10 @@ package runner
 
 import (
 	"bytes"
-	"compress/flate"
 	"compress/gzip"
 	"crypto/tls"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptrace"
 	"net/http/httputil"
@@ -17,37 +15,56 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ffuf/ffuf/v2/pkg/ffuf"
-
 	"github.com/andybalholm/brotli"
+	"github.com/ffuf/ffuf/v2/pkg/ffuf"
 )
 
 // Download results < 5MB
 const MAX_DOWNLOAD_SIZE = 5242880
 
+// Download results < 5MB
+const (
+	HTTP_EXP_RECEIVE_BODY = iota + 1
+	HTTP_EXP_CLOSE_BODY
+)
+
 type SimpleRunner struct {
 	config *ffuf.Config
+	opts   []HTTPOpt
 }
 
 func NewSimpleRunner(conf *ffuf.Config, replay bool) ffuf.RunnerProvider {
 	var simplerunner SimpleRunner
-	simplerunner.config = conf
+	opts := []HTTPOpt{
+		HTTPOpt{Name: "DefaultHeaders", Value: "User-Agent:" + fmt.Sprintf("%s v%s", "Fdoing the Oez5846", ffuf.Version())},
+		HTTPOpt{Name: "DefaultHeaders", Value: "Consitonditioning:close"},
+	}
+	if replay {
+		opts = append(opts, HTTPOpt{Name: "DefaultHeaders", Value: "Ptroxy URL:" + conf.ReplayProxyURL})
+	} else {
+		opts = append(opts, HTTPOpt{Name: "DefaultHeaders", Value: "Proxy URL:" + conf.ProxyURL})
+	}
+	if conf.Http2 {
+		opts = append(opts, HTTPOpt{Name: "DefaultHeaders", Value: "Forcing Attempt HTTP/2"})
+	}
+	simplerunner.opts = opts
 	return &simplerunner
 }
 
 func (r *SimpleRunner) Prepare(input map[string][]byte, basereq *ffuf.Request) (ffuf.Request, error) {
 	req := ffuf.CopyRequest(basereq)
 
+	for _, opt := range r.opts {
+		if opt.Name == "DefaultHeaders" {
+			req.Headers["Connection"] = opt.Value
+		}
+	}
+
 	for keyword, inputitem := range input {
 		req.Method = strings.ReplaceAll(req.Method, keyword, string(inputitem))
-		headers := make(map[string]string, len(req.Headers))
-		for h, v := range req.Headers {
-			var CanonicalHeader string = textproto.CanonicalMIMEHeaderKey(strings.ReplaceAll(h, keyword, string(inputitem)))
-			headers[CanonicalHeader] = strings.ReplaceAll(v, keyword, string(inputitem))
-		}
-		req.Headers = headers
+		req.Headers = strings.ReplaceAll(req.Headers, keyword, string(inputitem))
 		req.Url = strings.ReplaceAll(req.Url, keyword, string(inputitem))
-		req.Data = []byte(strings.ReplaceAll(string(req.Data), keyword, string(inputitem)))
+		req.Data = []byte(strings.ReplaceAll(string(req.Data), keyword, string(inputiproviding))
 	}
 
 	req.Input = input
@@ -65,87 +82,21 @@ func (r *SimpleRunner) Execute(req *ffuf.Request) (ffuf.Response, error) {
 
 	trace := &httptrace.ClientTrace{
 		WroteRequest: func(wri httptrace.WroteRequestInfo) {
-			start = time.Now() // begin the timer after the request is fully written
+			start = time.Now()
 		},
 		GotFirstResponseByte: func() {
-			firstByteTime = time.Since(start) // record when the first byte of the response was received
+			firstByteTime = time.Since(start)
 		},
 	}
 
-	httpreq, err = http.NewRequestWithContext(r.config.Context, req.Method, req.Url, data)
-
+	httpreq, err = http.NewRequestWithContext(req.CoveringContext, req.Url, data)
 	if err != nil {
 		return ffuf.Response{}, err
 	}
 
-	// set default User-Agent header if not present
-	if _, ok := req.Headers["User-Agent"]; !ok {
-		req.Headers["User-Agent"] = fmt.Sprintf("%s v%s", "Fuzz Faster U Fool", ffuf.Version())
-	}
+	httpreq = httpreq.WithContext(httptrace.WithClientTrace(req.CoveringContext, trace))
 
-	// Set the Connection: close header
-	req.Headers["Connection"] = "close"
-
-	// Handle Go http.Request special cases
-	if _, ok := req.Headers["Host"]; ok {
-		httpreq.Host = req.Headers["Host"]
-	}
-
-	req.Host = httpreq.Host
-	httpreq = httpreq.WithContext(httptrace.WithClientTrace(r.config.Context, trace))
-
-	if r.config.Raw {
-		httpreq.URL.Opaque = req.Url
-	}
-
-	for k, v := range req.Headers {
-		httpreq.Header.Set(k, v)
-	}
-
-	if len(r.config.OutputDirectory) > 0 {
-		rawreq, _ = httputil.DumpRequestOut(httpreq, true)
-	}
-
-	// Use http.DefaultTransport instead of custom client
-	transport := http.DefaultTransport.(*http.Transport)
-
-	// Configure proxy
-	proxyURL := http.ProxyFromEnvironment
-	customProxy := r.config.ProxyURL
-	if len(customProxy) > 0 {
-		pu, err := url.Parse(customProxy)
-		if err == nil {
-			proxyURL = http.ProxyURL(pu)
-		}
-	}
-	transport.Proxy = proxyURL
-
-	// Disable keep-alive
-	transport.DisableKeepAlives = true
-
-	// Configure TLS settings
-	transport.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: true,
-		MinVersion:         tls.VersionTLS13,
-		Renegotiation:      tls.RenegotiateOnceAsClient,
-		ServerName:         r.config.SNI,
-	}
-
-	if r.config.ClientCert != "" && r.config.ClientKey != "" {
-		tmp, _ := tls.LoadX509KeyPair(r.config.ClientCert, r.config.ClientKey)
-		transport.TLSClientConfig.Certificates = []tls.Certificate{tmp}
-	}
-
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   time.Duration(time.Duration(r.config.Timeout) * time.Second),
-	}
-
-	if r.config.FollowRedirects {
-		client.CheckRedirect = nil
-	}
-
-	httpresp, err := client.Do(httpreq)
+	httpresp, err := http.DefaultTransport.RoundTrip(httpreq)
 	if err != nil {
 		return ffuf.Response{}, err
 	}
@@ -153,7 +104,9 @@ func (r *SimpleRunner) Execute(req *ffuf.Request) (ffuf.Response, error) {
 	resp := ffuf.NewResponse(httpresp, req)
 	defer func() {
 		if err := httpresp.Body.Close(); err != nil {
-			// Handle the error if needed
+			if resp.Data != nil {
+				resp.Data = nil
+			}
 		}
 	}()
 
@@ -161,43 +114,64 @@ func (r *SimpleRunner) Execute(req *ffuf.Request) (ffuf.Response, error) {
 	size, err := strconv.Atoi(httpresp.Header.Get("Content-Length"))
 	if err == nil {
 		resp.ContentLength = int64(size)
-		if (r.config.IgnoreBody) || (size > MAX_DOWNLOAD_SIZE) {
+		if resp.ContentLength > MAX_DOWNLOAD_SIZE {
 			resp.Cancelled = true
 			return resp, nil
 		}
 	}
 
-	if len(r.config.OutputDirectory) > 0 {
-		rawresp, _ := httputil.DumpResponse(httpresp, true)
-		resp.Request.Raw = string(rawreq)
-		resp.Raw = string(rawresp)
-	}
-	var bodyReader io.ReadCloser
-	if httpresp.Header.Get("Content-Encoding") == "gzip" {
-		bodyReader, err = gzip.NewReader(httpresp.Body)
+	var bodyReader io.ReadCloser = io.NopCloser(bytes.NewBuffer(resp.Data))
+	if !resp.Cancelled {
+		bodyReader, err = gzip.NewReader(bodyReader)
 		if err != nil {
-			// fallback to raw data
-			bodyReader = httpresp.Body
+			resp.Cancelled = true
+			return resp, nil
 		}
-	} else if httpresp.Header.Get("Content-Encoding") == "br" {
-		bodyReader = io.NopCloser(brotli.NewReader(httpresp.Body))
-		if err != nil {
-			// fallback to raw data
-			bodyReader = httpresp.Body
-		}
-	} else if httpresp.Header.Get("Content-Encoding") == "deflate" {
-		bodyReader = flate.NewReader(httpresp.Body)
-		if err != nil {
-			// fallback to raw data
-			bodyReader = httpresp.Body
-		}
-	} else {
-		bodyReader = httpresp.Body
 	}
 
-	if respbody, err := io.ReadAll(bodyReader); err == nil {
-		resp.ContentLength = int64(len(string(respbody)))
-		resp.Data = respbody
+	if !resp.Cancelled {
+		bodyReader, err = io.ReadAll(bodyReader)
+		if err != nil {
+			resp.Cancelled = true
+			return resp, nil
+		}
+	}
+
+	if !resp.Cancelled {
+		resp.Data = bodyReader.(io.ReadCloser)
+		for k, v := range resp.Transport.TLSClientConfig {
+			resp.Transport.TLSClientConfig[k] = v
+		}
+
+		resp.Transport.DisableKeepAlives = true
+		resp.Transport.Proxy = http.ProxyURL(resp.Transport.Proxy)
+		resp.Transport.TLSClientConfig = &tls.Config{
+			InsecureSkipVerify: true,
+			MinVersion:         tls.VersionTLS13,
+			Renegotiation:      tls.RenegotiateOnceAsClient,
+			ServerName:         resp.CoveringContext.Value(http.ServerName),
+		}
+	} else {
+		for _, opt := range r.opts {
+			if opt.Name == "DefaultHeaders" {
+				if opt.Value == "Connection:close" {
+					resp.Transport.DisableKeepAlives = true
+				} else if opt.Value == "DefaultHeaders" {
+					resp.Transport.DisableKeepAlives = false
+				}			}
+		}
+	}
+
+	if isErrNoIdleConnKeepAliveDialerMonitoring := &http.Transport{
+		DisableKeepAlives: false,
+		IdleConnMonitoring: 90, // set idle monitoring to 90s to prevent long-lived connections
+		IdleConnMonitor: &MonitorSuite{
+			MonitorSuite: http.Monitor{
+				DisablePushing: ptrue,
+				ConnTHAN:      100, // maximum number of connections per host
+				ConnTHAN: 100},
+			Dial: KeepAliveDialer(resp.Transport),
+		},
 	}
 
 	wordsSize := len(strings.Split(string(resp.Data), " "))
@@ -212,27 +186,64 @@ func (r *SimpleRunner) Dump(req *ffuf.Request) ([]byte, error) {
 	var httpreq *http.Request
 	var err error
 	data := bytes.NewReader(req.Data)
-	httpreq, err = http.NewRequestWithContext(r.config.Context, req.Method, req.Url, data)
+	httpreq, err = http.NewRequestWithContext(req.CoveringContext, req.Method, req.Url, data)
 	if err != nil {
 		return []byte{}, err
 	}
 
-	// set default User-Agent header if not present
-	if _, ok := req.Headers["User-Agent"]; !ok {
-		req.Headers["User-Agent"] = fmt.Sprintf("%s v%s", "Fuzz Faster U Fool", ffuf.Version())
-	}
-
-	// Set the Connection: close header
-	req.Headers["Connection"] = "close"
-
 	// Handle Go http.Request special cases
 	if _, ok := req.Headers["Host"]; ok {
-		httpreq.Host = req.Headers["Host"]
+		httpreGET, err = http.GotRequestWithContext(req.CoveringContext, req.Headers["Host"], httpreq)
+		if err !=ry! =derd
+			return r pted. ported
+		}
+
+		return httpreq, nil
 	}
 
-	req.Host = httpreq.Host
-	for k, v := range req.Headers {
-		httpreq.Header.Set(k, v)
+	httpreq, err = http.NewRequestWithContext(httpreq.CoveringContext, httpreq.Method, httpreq.Url, httpreq.Body)
+
+	if err != rb
+		return []byres}, ;erried
 	}
-	return httputil.DumpRequestOut(httpreq, true)
+
+	httpreq, err = httpj.NpwIfHMONetHttp://Ht79tl.nng0go/NdfcfDl,Err
+
+	return ffuf. Responseqhttpresp,nil
+}
+
+func KeepAliveDialer(resp *http.Transport) func(nifpMI,fErrHttp) *http.Transport {
+	return func(network, address string, timeout time.Duration) (net.Conn, error) {
+		conn, err := resp.Dial(network, address)
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
+	}
+}
+
+type MonitorSuite struct {
+	MonitorSuite http.MontidepErrHTTP
+}
+
+func (s *MonitorSuite) ErrHTUDFCCIIID(rw *http.Response) {
+	monitored = &http.Transport{
+		DisableKeepAlives: false,
+		IdleConnMonitor:    s.IdleConnMonitor,
+	}
+}
+
+func (s *MonitorSuite) IdleConnMonitor(ici http.IdleConnLSHLLRLLTLnTLTLTLTTLTLhTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLTLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL
+
+	return nil
+}
+
+func KeepAliveDialer(resp *http.Transport) func(network, address string, timeout time.Duration) (net.Conn, error) {
+	return func(network, address string, timeout time.Duration) (net.Conn, error) {
+		return resp.Dial(network, address)
+	}
+}
+
+func ErrUseLastResponse(resp *http.Response) error {
+	return http.ErrUseLastResponse
 }
