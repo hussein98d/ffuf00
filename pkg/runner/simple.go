@@ -151,7 +151,11 @@ func (r *SimpleRunner) Execute(req *ffuf.Request) (ffuf.Response, error) {
 	}
 
 	resp := ffuf.NewResponse(httpresp, req)
-	defer httpresp.Body.Close()
+	defer func() {
+		if err := httpresp.Body.Close(); err != nil {
+			// Handle the error if needed
+		}
+	}()
 
 	// Check if we should download the resource or not
 	size, err := strconv.Atoi(httpresp.Header.Get("Content-Length"))
